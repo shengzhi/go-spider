@@ -39,6 +39,7 @@ func newFectcher(in <-chan *Task, out chan<- *TaskContext, timeout time.Duration
 
 // Run 执行http请求
 func (f *Fetcher) Run(wg *sync.WaitGroup) {
+	defer wg.Done()
 LOOP:
 	for {
 		select {
@@ -55,8 +56,6 @@ LOOP:
 				Err:      err,
 			}
 		case <-time.After(time.Minute * 10):
-			fmt.Println("done...")
-			wg.Done()
 			break LOOP
 		}
 	}

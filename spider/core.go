@@ -122,20 +122,20 @@ func NewTask(url string, handler Handler) *Task {
 
 // DataProcesser 数据处理接口
 type DataProcesser interface {
-	Process(ch <-chan interface{})
+	Process(ch <-chan interface{}) error
 }
 
 // DataHandlerFunc 包装方法为数据处理接口
-func DataHandlerFunc(fn func(ch <-chan interface{})) DataHandler {
+func DataHandlerFunc(fn func(ch <-chan interface{}) error) DataHandler {
 	return DataHandler(fn)
 }
 
 // DataHandler 数据处理方法
-type DataHandler func(ch <-chan interface{})
+type DataHandler func(ch <-chan interface{}) error
 
 // Process 实现接口DataProcesser
-func (dh DataHandler) Process(ch <-chan interface{}) {
-	dh(ch)
+func (dh DataHandler) Process(ch <-chan interface{}) error {
+	return dh(ch)
 }
 
 // Spider 蜘蛛
@@ -146,7 +146,7 @@ type Spider struct {
 	chData        chan interface{}
 	processer     DataProcesser
 	taskNum       int
-	iscompleted   chan struct{}
+	iscompleted   chan error
 	done, isdebug bool
 }
 
@@ -155,7 +155,7 @@ func NewSpider(dp DataProcesser) *Spider {
 	s := &Spider{
 		chData:      make(chan interface{}, 1000),
 		processer:   dp,
-		iscompleted: make(chan struct{}),
+		iscompleted: make(chan error),
 	}
 	return s
 }
@@ -184,40 +184,43 @@ func (s *Spider) SetTimeout(d time.Duration) { s.timeout = d }
 func (s *Spider) SetTaskNum(n int) { s.taskNum = n }
 
 // Run 开爬
-func (s *Spider) Run() {
-	out := make(chan *TaskContext, 50)
+func (s *Spider) Run() error {
+	out := make(chan *TaskContext, 1000)
 	s.fetcher = newFectcher(s.taskManager.Chan(), out, s.timeout)
 	s.fetcher.isdebug = s.isdebug
-
-	go func() {
-		for tc := range out {
-			if tc.Err != nil && tc.task.Retry > 0 {
-				tc.task.Retry--
-				s.taskManager.Enqueue(tc.task)
-				continue
-			}
-			tc.spider = s
-			tc.task.Handler(tc)
-		}
-	}()
-	wg := &sync.WaitGroup{}
 	if s.taskNum == 0 {
 		s.taskNum = runtime.NumCPU()
 	}
+	for i := 0; i < s.taskNum; i++ {
+		go func() {
+			for tc := range out {
+				if tc.Err != nil && tc.task.Retry > 0 {
+					log.Println("Fetch URL error:", tc.Err)
+					tc.task.Retry--
+					s.taskManager.Enqueue(tc.task)
+					continue
+				}
+				tc.spider = s
+				tc.task.Handler(tc)
+			}
+		}()
+	}
+	wg := &sync.WaitGroup{}
+
 	for i := 0; i < s.taskNum; i++ {
 		wg.Add(1)
 		go s.fetcher.Run(wg)
 	}
 	if s.processer != nil {
-		go func() {
-			s.processer.Process(s.chData)
-			s.iscompleted <- struct{}{}
-		}()
+		go func() { s.iscompleted <- s.processer.Process(s.chData) }()
+	} else {
+		s.iscompleted <- nil
 	}
 	wg.Wait()
 	s.done = true
+	close(out)
 	close(s.chData)
-	<-s.iscompleted
+	return <-s.iscompleted
 }
 
 // genData 输出数据
