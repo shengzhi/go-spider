@@ -15,6 +15,7 @@ import (
 
 // Fetcher http执行器
 type Fetcher struct {
+	spider      *Spider
 	in          <-chan *Task
 	out         chan<- *TaskContext
 	timeount    time.Duration
@@ -50,10 +51,16 @@ LOOP:
 				log.Println(err)
 			}
 			// fmt.Println("http call end ", task.URL)
+			if !task.AllowRepeat && f.spider.afterTaskDone != nil {
+				f.spider.afterTaskDone(task)
+			}
 			f.out <- &TaskContext{
 				task:     task,
 				Response: res,
 				Err:      err,
+			}
+			if task.Sleep > 0 {
+				time.Sleep(task.Sleep)
 			}
 		case <-time.After(time.Minute * 10):
 			break LOOP

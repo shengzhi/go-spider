@@ -41,7 +41,13 @@ func (tc *TaskContext) ExtData() interface{} {
 func (tc *TaskContext) AddTask(tasks ...*Task) {
 	// fmt.Println("add new tasks number:", len(tasks))
 	for _, t := range tasks {
-		tc.spider.taskManager.Enqueue(t)
+		if !t.AllowRepeat && tc.spider.beforeAddTask != nil {
+			if tc.spider.beforeAddTask(t) == nil {
+				tc.spider.taskManager.Enqueue(t)
+			}
+		} else {
+			tc.spider.taskManager.Enqueue(t)
+		}
 	}
 }
 
@@ -80,6 +86,9 @@ func (tc *TaskContext) Data() ([]byte, error) {
 // Handler 爬取结果处理器
 type Handler func(c *TaskContext)
 
+// TaskHandler Task预处理
+type TaskHandler func(t *Task) error
+
 // Task 爬取任务
 type Task struct {
 	URL, Method string
@@ -88,7 +97,9 @@ type Task struct {
 	Cookies     []*http.Cookie
 	Handler     Handler
 	ExtData     interface{}
+	Sleep       time.Duration
 	Retry       byte
+	AllowRepeat bool
 }
 
 func (t *Task) String() string {
@@ -140,22 +151,26 @@ func (dh DataHandler) Process(ch <-chan interface{}) error {
 
 // Spider 蜘蛛
 type Spider struct {
-	taskManager   TaskManager
-	timeout       time.Duration
-	fetcher       *Fetcher
-	chData        chan interface{}
-	processer     DataProcesser
-	taskNum       int
-	iscompleted   chan error
-	done, isdebug bool
+	taskManager                  TaskManager
+	timeout                      time.Duration
+	fetcher                      *Fetcher
+	chData                       chan interface{}
+	processer                    DataProcesser
+	beforeAddTask, afterTaskDone TaskHandler
+	taskNum                      int
+	iscompleted                  chan error
+	done, isdebug                bool
 }
 
 // NewSpider 创建爬虫实例
-func NewSpider(dp DataProcesser) *Spider {
+func NewSpider(dp DataProcesser, options ...OptionFunc) *Spider {
 	s := &Spider{
 		chData:      make(chan interface{}, 1000),
 		processer:   dp,
 		iscompleted: make(chan error),
+	}
+	for _, f := range options {
+		f(s)
 	}
 	return s
 }
@@ -173,7 +188,9 @@ func (s *Spider) InitFunc(fn func() chan *Task) {
 
 // Execute 立即执行任务
 func (s *Spider) Execute(t *Task) (*http.Response, error) {
-	res, err := newFectcher(nil, nil, time.Second*30).httpCall(t)
+	f := newFectcher(nil, nil, time.Second*30)
+	f.spider = s
+	res, err := f.httpCall(t)
 	return res, err
 }
 
@@ -187,6 +204,7 @@ func (s *Spider) SetTaskNum(n int) { s.taskNum = n }
 func (s *Spider) Run() error {
 	out := make(chan *TaskContext, 1000)
 	s.fetcher = newFectcher(s.taskManager.Chan(), out, s.timeout)
+	s.fetcher.spider = s
 	s.fetcher.isdebug = s.isdebug
 	if s.taskNum == 0 {
 		s.taskNum = runtime.NumCPU()
