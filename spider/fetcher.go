@@ -45,12 +45,11 @@ LOOP:
 	for {
 		select {
 		case task := <-f.in:
-			// fmt.Println("http call begin ", task.URL)
 			res, err := f.httpCall(task)
 			if err != nil {
 				log.Println(err)
 			}
-			// fmt.Println("http call end ", task.URL)
+			f.dumpResponse(res)
 			if !task.AllowRepeat && f.spider.afterTaskDone != nil {
 				f.spider.afterTaskDone(task)
 			}
@@ -95,6 +94,14 @@ func (f *Fetcher) dumpRequest(req *http.Request) {
 	if !f.isdebug {
 		return
 	}
-	dumpReq, _ := httputil.DumpRequest(req, false)
+	dumpReq, _ := httputil.DumpRequest(req, true)
 	fmt.Println(string(dumpReq))
+}
+
+func (f *Fetcher) dumpResponse(resp *http.Response) {
+	if !f.isdebug {
+		return
+	}
+	dumpResp, _ := httputil.DumpResponse(resp, true)
+	fmt.Println(string(dumpResp))
 }
