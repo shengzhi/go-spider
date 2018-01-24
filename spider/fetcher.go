@@ -3,6 +3,7 @@
 package spider
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -45,7 +46,9 @@ LOOP:
 	for {
 		select {
 		case task := <-f.in:
-			res, err := f.httpCall(task)
+			ctx, cancel := context.WithTimeout(context.Background(), f.timeount)
+			res, err := f.httpCall(ctx, task)
+			cancel()
 			if err != nil {
 				log.Println(err)
 			}
@@ -67,7 +70,7 @@ LOOP:
 	}
 }
 
-func (f *Fetcher) httpCall(t *Task) (*http.Response, error) {
+func (f *Fetcher) httpCall(ctx context.Context, t *Task) (*http.Response, error) {
 	r, err := http.NewRequest(t.Method, t.URL, t.Data)
 	if err != nil {
 		return nil, fmt.Errorf("Initialize request occurs error:%v", err)
@@ -80,14 +83,29 @@ func (f *Fetcher) httpCall(t *Task) (*http.Response, error) {
 		}
 	}
 	f.dumpRequest(r)
+	type httpResp struct {
+		resp *http.Response
+		err  error
+	}
 
+	ch := make(chan httpResp, 1)
 	client := f.httpclient
 
-	if strings.HasPrefix(t.URL, "https") {
+	if strings.HasPrefix(r.URL.Scheme, "https") {
 		client = f.httpsclient
 	}
-	client.Timeout = f.timeount
-	return client.Do(r)
+	go func() {
+		resp, err := client.Do(r)
+		ch <- httpResp{resp, err}
+	}()
+	select {
+	case <-ctx.Done():
+		client.Transport.(*http.Transport).CancelRequest(r)
+		return nil, fmt.Errorf("Timeout,URL:%s", r.URL)
+	case resp := <-ch:
+		return resp.resp, resp.err
+	}
+
 }
 
 func (f *Fetcher) dumpRequest(req *http.Request) {

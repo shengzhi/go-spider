@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -168,6 +169,7 @@ func NewSpider(dp DataProcesser, options ...OptionFunc) *Spider {
 		chData:      make(chan interface{}, 1000),
 		processer:   dp,
 		iscompleted: make(chan error),
+		timeout:     time.Second * 30,
 	}
 	for _, f := range options {
 		f(s)
@@ -190,7 +192,7 @@ func (s *Spider) InitFunc(fn func() chan *Task) {
 func (s *Spider) Execute(t *Task) (*http.Response, error) {
 	f := newFectcher(nil, nil, time.Second*30)
 	f.spider = s
-	res, err := f.httpCall(t)
+	res, err := f.httpCall(context.Background(), t)
 	return res, err
 }
 
@@ -213,7 +215,7 @@ func (s *Spider) Run() error {
 		go func() {
 			for tc := range out {
 				if tc.Err != nil && tc.task.Retry > 0 {
-					log.Println("Fetch URL error:", tc.Err)
+					log.Println(tc.Err)
 					tc.task.Retry--
 					s.taskManager.Enqueue(tc.task)
 					continue
